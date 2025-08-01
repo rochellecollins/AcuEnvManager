@@ -2,11 +2,11 @@ namespace AcuEnvManager
 {
     public class ActionController
     {
-        public string repoPath { get; set; }
+        public SettingsModel settings { get; }
 
-        public ActionController(string path)
+        public ActionController(SettingsModel settings)
         {
-            repoPath = path;
+            this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
 
         internal async Task<bool> ExecuteActionAsync(ActionModel action, IProgress<string> progress)
@@ -16,12 +16,12 @@ namespace AcuEnvManager
             {
                 case ActionType.Checkout:
                     progress.Report("Checking out branch...");
-                    result = await CommandHelper.CheckOutBranchAsync(Path.Combine(repoPath, action.EntityName), action.Value, progress);
+                    result = await CommandHelper.CheckOutBranchAsync(Path.Combine(settings.RepoPath, action.WorkTreeName), action.Value, progress);
                     progress.Report("Checkout complete.");
                     break;
                 case ActionType.Acubuild:
                     progress.Report("Running Acubuild...");
-                    result = await CommandHelper.AcubuildAsync(Path.Combine(repoPath, action.EntityName), progress);
+                    result = await CommandHelper.AcubuildAsync(Path.Combine(settings.RepoPath, action.WorkTreeName), progress);
                     progress.Report("Acubuild complete.");
                     break;
                 case ActionType.Update:                   
@@ -29,10 +29,15 @@ namespace AcuEnvManager
                     switch(action.Entity)
                     {
                         case EntityType.WebConfig:
-                            result = await FileSystemHelper.UpdateWebConfigAsync(Path.Combine(repoPath, action.EntityName), action.Value, progress);
+                            result = await FileSystemHelper.UpdateWebConfigAsync(Path.Combine(settings.RepoPath, action.WorkTreeName), action.Value, progress);
                             break;
                     }
                     progress.Report("Update complete.");
+                    break;
+                case ActionType.Download:
+                    progress.Report("Downloading...");
+                    result = await FileSystemHelper.DownloadFileAsync(settings, action.Value, progress);
+                    progress.Report("Download complete.");
                     break;
             }
             return result;

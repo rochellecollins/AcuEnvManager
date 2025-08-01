@@ -2,6 +2,7 @@ namespace AcuEnvManager
 {
     public class ActionModel
     {
+        public string WorkTreeName { get; set; }    
         public string ActionName { get; internal set; }
         public string Entity { get; internal set; }
         public string EntityName { get; internal set; }

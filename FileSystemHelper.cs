@@ -214,27 +214,17 @@ namespace AcuEnvManager
             }
         }
 
-        internal static async Task<List<BuildModel>> GetBuildListAsync(string buildPath, IProgress<string> progress)
+        internal static void GetBuildListAsync(SettingsModel settings, List<BuildModel> builds, IProgress<string> progress)
         {
-            // Pseudocode:
-            // 1. Validate buildPath.
-            // 2. Get all directories in buildPath (major versions).
-            // 3. For each major version directory:
-            //    a. Get all subdirectories (minor versions).
-            //    b. Create BuildModel with MajorVersion and MinorVersions.
-            // 4. Return list of BuildModel.
 
-            var result = new List<BuildModel>();
-
-            if (string.IsNullOrWhiteSpace(buildPath) || !Directory.Exists(buildPath))
+            if (string.IsNullOrWhiteSpace(settings.BuildsPath) || !Directory.Exists(settings.BuildsPath))
             {
-                progress?.Report($"Build path '{buildPath}' does not exist.");
-                return result;
+                progress?.Report($"Build path '{settings.BuildsPath}' does not exist.");
             }
 
             try
             {
-                var majorDirs = Directory.GetDirectories(buildPath);
+                var majorDirs = Directory.GetDirectories(settings.BuildsPath);
 
                 foreach (var majorDir in majorDirs)
                 {
@@ -246,7 +236,7 @@ namespace AcuEnvManager
                         .Cast<string>() // Cast to non-nullable string
                         .ToList();
 
-                    result.Add(new BuildModel
+                    builds.Add(new BuildModel
                     {
                         MajorVersion = majorVersion,
                         MinorVersions = minorVersions
@@ -259,8 +249,95 @@ namespace AcuEnvManager
             {
                 progress?.Report($"Error reading build list: {ex.Message}");
             }
+        }
 
-            return await Task.FromResult(result);
+        internal static bool DirectoryExists(string path)
+        {
+            return !string.IsNullOrWhiteSpace(path) && Directory.Exists(path);
+        }
+
+        internal static async Task<bool> DownloadFileAsync(SettingsModel settings, string filename, IProgress<string> progress)
+        {
+            // Pseudocode:
+            // 1. Build source file path: remotepath/filename/acumaticaerp/acumaticainstall.msi
+            // 2. Build destination file path: localpath/acumaticainstall.msi
+            // 3. Check if source file exists, report and return false if not.
+            // 4. Create destination directory if it doesn't exist.
+            // 5. Copy file in chunks, reporting progress.
+            // 6. Return true if successful.
+
+            var sourceFile = Path.Combine(settings.BuildsPath, filename.Substring(0,4), filename,  "acumaticaerp", "AcumaticaERPInstall.msi");
+            var destFile = Path.Combine(settings.LocalBuildPath, "AcumaticaERPInstall.msi");
+
+            if (!File.Exists(sourceFile))
+            {
+                progress?.Report($"Source file not found: {sourceFile}");
+                return false;
+            }
+
+            try
+            {
+                progress?.Report("Starting File Copy...");
+                Directory.CreateDirectory(settings.LocalBuildPath);
+
+                const int bufferSize = 81920; // 80 KB
+                var fileInfo = new FileInfo(sourceFile);
+                long totalBytes = fileInfo.Length;
+                long copiedBytes = 0;
+                var stopwatch = Stopwatch.StartNew();
+
+                if (!settings.FastCopy)
+                {
+                    using (var sourceStream = new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, useAsync: true))
+                    using (var destStream = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, useAsync: true))
+                    {
+
+                        var buffer = new byte[bufferSize];
+                        int bytesRead;
+                        // Replace inside DownloadFileAsync method, in the file copy loop:
+                        int lastPercent = -1;
+                        while ((bytesRead = await sourceStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        {
+                            await destStream.WriteAsync(buffer, 0, bytesRead);
+                            copiedBytes += bytesRead;
+                            int percent = (int)((copiedBytes * 100) / totalBytes);
+
+                            if (percent > lastPercent)
+                            {
+                                lastPercent = percent;
+                                var elapsed = stopwatch.Elapsed;
+                                TimeSpan? estimatedRemaining = null;
+                                if (percent > 0)
+                                {
+                                    var totalEstimated = TimeSpan.FromMilliseconds(elapsed.TotalMilliseconds * 100 / percent);
+                                    estimatedRemaining = totalEstimated - elapsed;
+                                }
+
+                                string timeLeftStr = estimatedRemaining.HasValue
+                                    ? $"Estimated finish time: {DateTime.Now.Add(estimatedRemaining.Value):HH:mm:ss}"
+                                    : "Estimating...";
+
+                                progress?.Report($"Copying... {percent}% ({copiedBytes}/{totalBytes} bytes). {timeLeftStr}");
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    using var sourceStream = new ProgressStream(new FileStream(sourceFile, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, useAsync: true), totalBytes, stopwatch, progress);
+                    using var destStream = new FileStream(destFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, useAsync: true);
+                    await sourceStream.CopyToAsync(destStream, bufferSize);
+                }
+                stopwatch.Stop();
+
+                progress?.Report("File copy completed successfully.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                progress?.Report($"Error copying file: {ex.Message}");
+                return false;
+            }
         }
     }
 }

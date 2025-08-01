@@ -53,8 +53,8 @@ namespace AcuEnvManager
 
         internal static async Task<bool> AcubuildAsync(string workingdirectory, IProgress<string> progress)
         {
-            var result = await RunCommandAsync("acubuild", "", workingdirectory, progress);
-            return result.Contains("error", StringComparison.OrdinalIgnoreCase) == false;
+            var (exitCode, result) = await RunCommandAsync("acubuild", "", workingdirectory, progress);
+            return exitCode == 0;
         }
 
         /// <summary>
@@ -64,7 +64,7 @@ namespace AcuEnvManager
         /// <param name="arguments">Arguments for the command (optional).</param>
         /// <param name="workingDirectory">Working directory (optional).</param>
         /// <returns>Standard output and error as a string.</returns>
-        public static async Task<string> RunCommandAsync(string command, string arguments, string? workingDirectory, IProgress<string> progress)
+        public static async Task<(int exitCode, string output)> RunCommandAsync(string command, string arguments, string? workingDirectory, IProgress<string> progress)
         {
             var output = new StringBuilder();
 
@@ -82,15 +82,15 @@ namespace AcuEnvManager
                 }
             };
 
-            process.OutputDataReceived += (s, e) => { if (e.Data != null) progress.Report(e.Data); };
-            process.ErrorDataReceived += (s, e) => { if (e.Data != null) progress.Report(e.Data); };
+            process.OutputDataReceived += (s, e) => { if (e.Data != null) progress.Report(e.Data); output.AppendLine(e.Data); };
+            process.ErrorDataReceived += (s, e) => { if (e.Data != null) progress.Report(e.Data); output.AppendLine(e.Data); };
 
             process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             await process.WaitForExitAsync();
 
-            return output.ToString();
+            return (process.ExitCode, output.ToString());
         }
 
         internal static async Task<(bool, string?)> RunGitCommandAsync(string arguments, string workingDirectory, IProgress<string> progress)

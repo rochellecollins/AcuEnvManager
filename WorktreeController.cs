@@ -4,23 +4,21 @@ namespace AcuEnvManager
 {
     public class WorktreeController
     {
-        public string repoPath { get; set; }
-        public string settingsPath { get; set; }
 
         public DatabaseHelper? dbHelper { get; set; }
+        public SettingsModel settings { get; set; }
 
-        public WorktreeController(string path, string settingsPath)
+        public WorktreeController(SettingsModel settings)
         {
-            repoPath = path;
-            this.settingsPath = settingsPath;
+            this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
         }
 
         internal BindingList<WorktreeModel> GetWorktrees()
         {
-            var repos = FileSystemHelper.GetDirectories(repoPath);
+            var repos = FileSystemHelper.GetDirectories(settings.RepoPath);
 
             var worktreeList = new BindingList<WorktreeModel>();
-            var savedWorktrees = XMLHelper.LoadWorktrees(settingsPath);
+            var savedWorktrees = XMLHelper.LoadWorktrees(settings.SettingsPath);
 
             foreach (var repo in repos)
             {
@@ -46,44 +44,25 @@ namespace AcuEnvManager
             return worktreeList;
         }
 
-        public bool UpdateWorktreeDetails(WorktreeModel wt, IProgress<string> progress)
+        public void UpdateWorktreeDetails(WorktreeModel wt, IProgress<string> progress)
         {
-            bool changed = false;
-            var newCodeVers = CommandHelper.GetLatestTagAsync(Path.Combine(repoPath, wt.WorkTreeName), progress).Result ?? string.Empty;
-            if(newCodeVers != wt.CodeVers)
-            {
-                wt.CodeVers = newCodeVers;
-                changed = true;
-            }
-            var newBranchName = CommandHelper.GetCurrentBranchAsync(Path.Combine(repoPath, wt.WorkTreeName), progress).Result ?? string.Empty;
-            if(newBranchName != wt.BranchName)
-            {
-                wt.BranchName = newBranchName;
-                wt.JIRALink = GetJIRALink(wt.BranchName);
-                changed = true;
-            }
-            var serverAndDatabase = FileSystemHelper.GetServerAndDatabaseFromWebConfig(Path.Combine(repoPath, wt.WorkTreeName));
-            if (wt.DBServer != serverAndDatabase.ServerName || wt.DBName != serverAndDatabase.DatabaseName)
-            {
-                wt.DBServer = serverAndDatabase.ServerName ?? "None";
-                wt.DBName = serverAndDatabase.DatabaseName ?? "None";
-                changed = true;
-            }
+            wt.CodeVers = CommandHelper.GetLatestTagAsync(Path.Combine(settings.RepoPath, wt.WorkTreeName), progress).Result ?? string.Empty;
+
+            wt.BranchName = CommandHelper.GetCurrentBranchAsync(Path.Combine(settings.RepoPath, wt.WorkTreeName), progress).Result ?? string.Empty;
+            wt.JIRALink = GetJIRALink(wt.BranchName);
+
+            var serverAndDatabase = FileSystemHelper.GetServerAndDatabaseFromWebConfig(Path.Combine(settings.RepoPath, wt.WorkTreeName));
+            wt.DBServer = serverAndDatabase.ServerName ?? "None";
+            wt.DBName = serverAndDatabase.DatabaseName ?? "None";
+
             if (wt.DBServer != "None" && wt.DBName != "None")
             {
-                var newDBVers = new DatabaseHelper(wt.DBServer, wt.DBName).GetDatabaseVersion() ?? string.Empty;
-                if (newDBVers != wt.DBVers)
-                {
-                    wt.DBVers = newDBVers;
-                    changed = true;
-                }
+                wt.DBVers = new DatabaseHelper(wt.DBServer, wt.DBName).GetDatabaseVersion() ?? string.Empty;
             }
-
-            // Save the updated worktree details to XML
-            if (changed)
-                XMLHelper.SaveWorktree(settingsPath, wt);
-
-            return changed;
+            else
+            {
+                wt.DBVers = "N/A";
+            }
         }
 
         private string GetJIRALink(string branchName)

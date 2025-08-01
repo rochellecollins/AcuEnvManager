@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Xml.Linq;
 
@@ -9,8 +10,9 @@ namespace AcuEnvManager
     {
         /// <summary>
         /// Saves a list of WorktreeModel objects to an XML file.
+        /// Ensures that existing Builds are not overwritten.
         /// </summary>
-        public static void SaveWorktrees(string filePath, IEnumerable<WorktreeModel> worktrees)
+        public static void SaveWorktrees(string filePath, IEnumerable<WorktreeModel> worktrees, IProgress<string> progress)
         {
             // Ensure the directory exists
             var directory = Path.GetDirectoryName(filePath);
@@ -19,28 +21,68 @@ namespace AcuEnvManager
                 Directory.CreateDirectory(directory);
             }
 
-            var doc = new XDocument(
-                new XElement("Worktrees",
-                    new XElement("SavedAt", DateTime.UtcNow),
-                    new XElement("Items",
-                        worktrees != null
-                            ? new List<XElement>(
-                                worktrees.Select(wt =>
-                                    new XElement("Worktree",
-                                        new XElement("WorkTreeName", wt.WorkTreeName),
-                                        new XElement("CodeVers", wt.CodeVers),
-                                        new XElement("BranchName", wt.BranchName),
-                                        new XElement("DBServer", wt.DBServer),
-                                        new XElement("DBName", wt.DBName),
-                                        new XElement("DBVers", wt.DBVers),
-                                        new XElement("JIRALink", wt.JIRALink)
-                                    )
-                                ))
-                            : null
-                    )
+            XDocument doc;
+            XElement? buildsElem = null;
+
+            if (File.Exists(filePath))
+            {
+                // Load existing XML and preserve Builds node
+                doc = XDocument.Load(filePath);
+                buildsElem = doc.Root?.Element("Builds");
+                // Remove existing Worktrees node if present
+                var worktreesElem = doc.Root?.Element("Worktrees");
+                worktreesElem?.Remove();
+            }
+            else
+            {
+                // Create new XML root
+                doc = new XDocument(new XElement("Root"));
+            }
+
+            var newWorktreesElem = new XElement("Worktrees",
+                new XElement("SavedAt", DateTime.UtcNow),
+                new XElement("Items",
+                    worktrees != null
+                        ? new List<XElement>(
+                            worktrees.Select(wt =>
+                                new XElement("Worktree",
+                                    new XElement("WorkTreeName", wt.WorkTreeName),
+                                    new XElement("CodeVers", wt.CodeVers),
+                                    new XElement("BranchName", wt.BranchName),
+                                    new XElement("DBServer", wt.DBServer),
+                                    new XElement("DBName", wt.DBName),
+                                    new XElement("DBVers", wt.DBVers),
+                                    new XElement("JIRALink", wt.JIRALink)
+                                )
+                            ))
+                        : null
                 )
             );
-            doc.Save(filePath);
+
+            doc.Root?.Add(newWorktreesElem);
+
+            // Re-add Builds if it existed
+            if (buildsElem != null)
+            {
+                doc.Root?.Add(buildsElem);
+            }
+
+            // Check if file is locked by another process
+            if (File.Exists(filePath))
+            {
+                try
+                {
+                    using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                    {
+                        doc.Save(filePath);
+                    }
+                }
+                catch (IOException)
+                {
+                    progress.Report($"The file '{filePath}' is currently in use by another process.");
+                }
+            }
+
         }
 
         /// <summary>
@@ -100,27 +142,9 @@ namespace AcuEnvManager
             doc.Save(filePath);
         }
 
-        /// <summary>
-        /// Loads application settings (as key-value pairs) from an XML file.
-        /// </summary>
-        public static Dictionary<string, string> LoadSettings(string filePath)
-        {
-            var result = new Dictionary<string, string>();
-            if (!File.Exists(filePath))
-                return result;
 
-            var doc = XDocument.Load(filePath);
-            foreach (var settingElem in doc.Descendants("Setting"))
-            {
-                var key = settingElem.Attribute("Key")?.Value;
-                var value = settingElem.Attribute("Value")?.Value;
-                if (key != null)
-                    result[key] = value ?? "";
-            }
-            return result;
-        }
 
-        internal static WorktreeModel SaveWorktree(string settingsPath, WorktreeModel wt)
+        internal static WorktreeModel SaveWorktree(string settingsPath, WorktreeModel wt, IProgress<string> progress)
         {
             if (wt == null)
                 throw new ArgumentNullException(nameof(wt));
@@ -138,7 +162,7 @@ namespace AcuEnvManager
             else
                 worktrees.Add(wt);
 
-            SaveWorktrees(settingsPath, worktrees);
+            SaveWorktrees(settingsPath, worktrees, progress);
             return wt;
         }
 
@@ -151,8 +175,18 @@ namespace AcuEnvManager
                 Directory.CreateDirectory(directory);
             }
 
-            var doc = new XDocument(
-                new XElement("Builds",
+            XDocument doc;
+            if (File.Exists(settingsPath))
+            {
+                // Load existing XML and preserve Worktrees
+                doc = XDocument.Load(settingsPath);
+
+                // Remove existing Builds node if present
+                var buildsElem = doc.Root?.Element("Builds");
+                buildsElem?.Remove();
+
+                // Add new Builds node
+                var newBuildsElem = new XElement("Builds",
                     new XElement("SavedAt", DateTime.UtcNow),
                     new XElement("Items",
                         buildList != null
@@ -172,8 +206,39 @@ namespace AcuEnvManager
                                 ))
                             : null
                     )
-                )
-            );
+                );
+
+                doc.Root?.Add(newBuildsElem);
+            }
+            else
+            {
+                // Create new XML with only Builds
+                doc = new XDocument(
+                    new XElement("Root",
+                        new XElement("Builds",
+                            new XElement("SavedAt", DateTime.UtcNow),
+                            new XElement("Items",
+                                buildList != null
+                                    ? new List<XElement>(
+                                        buildList.Select(b =>
+                                            new XElement("Build",
+                                                new XElement("MajorVersion", b.MajorVersion ?? ""),
+                                                new XElement("MinorVersions",
+                                                    b.MinorVersions != null
+                                                        ? new List<XElement>(
+                                                            b.MinorVersions.Select(mv =>
+                                                                new XElement("MinorVersion", mv ?? "")
+                                                            ))
+                                                        : null
+                                                )
+                                            )
+                                        ))
+                                    : null
+                            )
+                        )
+                    )
+                );
+            }
             doc.Save(settingsPath);
         }
 
@@ -210,6 +275,157 @@ namespace AcuEnvManager
             {
                 Console.WriteLine($"Error loading builds from XML: {ex.Message}");
                 return result;
+            }
+        }
+
+        internal static void SaveData(BindingList<WorktreeModel> worktreeList, List<BuildModel> buildList, SettingsModel settings, IProgress<string> getLogger)
+        {
+            if (settings == null || string.IsNullOrWhiteSpace(settings.SettingsPath))
+                throw new ArgumentNullException(nameof(settings));
+
+            // Ensure the directory exists
+            var directory = Path.GetDirectoryName(settings.SettingsPath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            settings.LastSave = DateTime.Now;
+
+            // Prepare Worktrees XML
+            var worktreesElem = new XElement("Worktrees",
+                new XElement("SavedAt", DateTime.UtcNow),
+                new XElement("Items",
+                    worktreeList != null
+                        ? new List<XElement>(
+                            worktreeList.Select(wt =>
+                                new XElement("Worktree",
+                                    new XElement("WorkTreeName", wt.WorkTreeName),
+                                    new XElement("CodeVers", wt.CodeVers),
+                                    new XElement("BranchName", wt.BranchName),
+                                    new XElement("DBServer", wt.DBServer),
+                                    new XElement("DBName", wt.DBName),
+                                    new XElement("DBVers", wt.DBVers),
+                                    new XElement("JIRALink", wt.JIRALink)
+                                )
+                            ))
+                        : null
+                )
+            );
+
+            // Prepare Builds XML
+            var buildsElem = new XElement("Builds",
+                new XElement("SavedAt", DateTime.UtcNow),
+                new XElement("Items",
+                    buildList != null
+                        ? new List<XElement>(
+                            buildList.Select(b =>
+                                new XElement("Build",
+                                    new XElement("MajorVersion", b.MajorVersion ?? ""),
+                                    new XElement("MinorVersions",
+                                        b.MinorVersions != null
+                                            ? new List<XElement>(
+                                                b.MinorVersions.Select(mv =>
+                                                    new XElement("MinorVersion", mv ?? "")
+                                                ))
+                                            : null
+                                    )
+                                )
+                            ))
+                        : null
+                )
+            );
+
+            // Prepare Settings XML (all public string properties without reflection)
+            var settingsDict = new Dictionary<string, string>
+            {
+                { nameof(SettingsModel.RepoPath), settings.RepoPath ?? "" },
+                { nameof(SettingsModel.SettingsPath), settings.SettingsPath ?? "" },
+                { nameof(SettingsModel.BuildsPath), settings.BuildsPath ?? "" },
+                { nameof(SettingsModel.LocalBuildPath), settings.LocalBuildPath ?? "" },
+                {nameof(SettingsModel.LastSave),settings.LastSave.ToString("o") }
+            };
+
+            var settingsElem = new XElement("Settings",
+                new XElement("SavedAt", DateTime.UtcNow),
+                new XElement("Items",
+                    settingsDict.Select(kvp =>
+                        new XElement("Setting",
+                            new XAttribute("Key", kvp.Key),
+                            new XAttribute("Value", kvp.Value)
+                        )
+                    )
+                )
+            );
+
+            // Compose root XML
+            var doc = new XDocument(
+                new XElement("Root",
+                    worktreesElem,
+                    buildsElem,
+                    settingsElem
+                )
+            );
+
+            try
+            {
+                doc.Save(settings.SettingsPath);
+                getLogger?.Report($"Data saved to '{settings.SettingsPath}'.");
+            }
+            catch (Exception ex)
+            {
+                getLogger?.Report($"Error saving data: {ex.Message}");
+            }
+        }
+
+        internal static SettingsModel LoadSettings(string settingsPath)
+        {
+            if (string.IsNullOrWhiteSpace(settingsPath) || !File.Exists(settingsPath))
+                return new SettingsModel();
+
+            try
+            {
+                var doc = XDocument.Load(settingsPath);
+                var settingsElem = doc.Descendants("Settings").FirstOrDefault();
+                if (settingsElem == null)
+                    return new SettingsModel();
+
+                var itemsElem = settingsElem.Element("Items");
+                if (itemsElem == null)
+                    return new SettingsModel();
+
+                var settingsDict = itemsElem.Elements("Setting")
+                    .Where(e => e.Attribute("Key") != null)
+                    .ToDictionary(
+                        e => e.Attribute("Key")!.Value,
+                        e => e.Attribute("Value")?.Value ?? ""
+                    );
+
+                var model = new SettingsModel();
+
+                // Set string properties
+                var type = typeof(SettingsModel);
+                foreach (var kvp in settingsDict)
+                {
+                    var prop = type.GetProperty(kvp.Key, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (prop != null && prop.CanWrite)
+                    {
+                        if (prop.PropertyType == typeof(string))
+                        {
+                            prop.SetValue(model, kvp.Value);
+                        }
+                        else if (prop.PropertyType == typeof(DateTime) && kvp.Key == nameof(SettingsModel.LastSave))
+                        {
+                            if (DateTime.TryParse(kvp.Value, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+                                prop.SetValue(model, dt);
+                        }
+                    }
+                }
+                model.SettingsPath = settingsPath;
+                return model;
+            }
+            catch
+            {
+                return new SettingsModel();
             }
         }
     }
