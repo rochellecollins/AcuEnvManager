@@ -1,0 +1,12 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs/AcuEnvManager/copilot-chat/ccba4d77/sessions
+/.vs/AcuEnvManager/CopilotIndices/17.14.794.21998
+/.vs/AcuEnvManager/DesignTimeBuild
+/.vs/AcuEnvManager/FileContentIndex
+/.vs/AcuEnvManager/v17/TestStore/0
+/.vs
+/bin/Debug/net8.0-windows
+/obj
